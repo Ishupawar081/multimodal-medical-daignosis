@@ -4,6 +4,23 @@ import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel
 from torchvision import models, transforms
 from PIL import Image
+import os
+import gdown
+
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="Medical AI Classifier",
+    page_icon="🩺",
+    layout="centered"
+)
+
+# ---------------- MODEL DOWNLOAD ----------------
+MODEL_PATH = "multimodal_model.pt"
+
+if not os.path.exists(MODEL_PATH):
+    st.info("Downloading model... please wait ⏳")
+    url = "https://drive.google.com/file/d/13DVTemHpUP_wP95ry_vjyuyWOkSsDl3u/view?usp=drive_link"  # 🔥 REPLACE THIS
+    gdown.download(url, MODEL_PATH, quiet=False)
 
 # ---------------- LABELS ----------------
 SYSTEM_LABELS = [
@@ -32,7 +49,6 @@ class MultiModalModel(nn.Module):
             param.requires_grad = False
 
         self.fc = nn.Linear(text_dim + 512, 256)
-
         self.system_head = nn.Linear(256, num_system)
         self.type_head = nn.Linear(256, num_type)
 
@@ -48,15 +64,21 @@ class MultiModalModel(nn.Module):
 
         return self.system_head(x), self.type_head(x)
 
-# ---------------- LOAD ----------------
-device = torch.device("cpu")
+# ---------------- LOAD MODEL (CACHED) ----------------
+@st.cache_resource
+def load_model():
+    device = torch.device("cpu")
 
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
 
-model = MultiModalModel(len(SYSTEM_LABELS), len(TYPE_LABELS))
-model.load_state_dict(torch.load("multimodal_model.pt", map_location=device))
-model.to(device)
-model.eval()
+    model = MultiModalModel(len(SYSTEM_LABELS), len(TYPE_LABELS))
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.to(device)
+    model.eval()
+
+    return tokenizer, model, device
+
+tokenizer, model, device = load_model()
 
 # ---------------- IMAGE ----------------
 image_transform = transforms.Compose([
@@ -74,8 +96,9 @@ def post_correct(system, dtype, text):
     if "masseter" in text or "mandible" in text:
         system = "ent"
 
-    if "sepsis" in text:
+    if "sepsis" in text or "septic" in text:
         system = "multisystemic"
+        dtype = "infection"
 
     if "lupus" in text:
         system = "immunological"
@@ -84,10 +107,15 @@ def post_correct(system, dtype, text):
         dtype = "degenerative"
 
     if "kidney stones" in text:
+        system = "renal"
         dtype = "metabolic"
 
-    if "pulmonary embolism" in text:
+    if "embolism" in text:
         system = "cardiovascular"
+        dtype = "vascular"
+
+    if "appendicitis" in text:
+        system = "gastrointestinal"
 
     return system, dtype
 
@@ -105,6 +133,7 @@ def predict(text, image):
     attention_mask = enc['attention_mask'].to(device)
 
     if image:
+        image = image.convert("RGB")
         img = image_transform(image).unsqueeze(0).to(device)
     else:
         img = torch.zeros(1, 3, 224, 224).to(device)
@@ -112,32 +141,43 @@ def predict(text, image):
     with torch.no_grad():
         sys_logits, type_logits = model(input_ids, attention_mask, img)
 
-    sys_pred = torch.argmax(sys_logits, dim=1).item()
-    type_pred = torch.argmax(type_logits, dim=1).item()
+    # probabilities
+    sys_probs = torch.softmax(sys_logits, dim=1)
+    type_probs = torch.softmax(type_logits, dim=1)
+
+    sys_pred = torch.argmax(sys_probs, dim=1).item()
+    type_pred = torch.argmax(type_probs, dim=1).item()
 
     system = SYSTEM_LABELS[sys_pred]
     dtype = TYPE_LABELS[type_pred]
 
     system, dtype = post_correct(system, dtype, text)
 
-    return system, dtype
+    return system, dtype, sys_probs.max().item(), type_probs.max().item()
 
 # ---------------- UI ----------------
-st.title("🩺 Medical Multimodal Classifier")
+st.title("🩺 Medical Multimodal AI Classifier")
+st.markdown("Predict **System** and **Disease Type** from clinical text + image")
 
-text = st.text_area("Enter Case Description")
+text = st.text_area("📄 Enter Case Description")
 
-image_file = st.file_uploader("Upload Image", type=["png","jpg","jpeg"])
+image_file = st.file_uploader("🖼 Upload Medical Image", type=["png","jpg","jpeg"])
 
 image = None
 if image_file:
     image = Image.open(image_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-if st.button("Predict"):
+if st.button("🔍 Predict"):
     if text:
-        system, dtype = predict(text, image)
-        st.success(f"System: {system}")
-        st.success(f"Type: {dtype}")
+        with st.spinner("Analyzing..."):
+            system, dtype, sys_conf, type_conf = predict(text, image)
+
+        st.success(f"🧠 System: {system} ({sys_conf:.2f})")
+        st.success(f"🧬 Type: {dtype} ({type_conf:.2f})")
+
     else:
         st.warning("Please enter text")
+
+st.markdown("---")
+st.caption("⚡ Built with Multimodal AI (Text + Image)")
