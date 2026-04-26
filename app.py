@@ -19,7 +19,7 @@ MODEL_PATH = "multimodal_model.pt"
 
 if not os.path.exists(MODEL_PATH):
     st.info("Downloading model... please wait ⏳")
-    url = "https://drive.google.com/file/d/13DVTemHpUP_wP95ry_vjyuyWOkSsDl3u/view?usp=drive_link"  # 🔥 REPLACE THIS
+    url = "https://drive.google.com/uc?id=13DVTemHpUP_wP95ry_vjyuyWOkSsDl3u"  # 🔥 REPLACE THIS
     gdown.download(url, MODEL_PATH, quiet=False)
 
 # ---------------- LABELS ----------------
